@@ -41,8 +41,8 @@ pico_set_program_name(backscatter_beamforming "backscatter_beamforming")
 pico_set_program_version(backscatter_beamforming "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(backscatter_beamforming 1)
-pico_enable_stdio_usb(backscatter_beamforming 0)
+pico_enable_stdio_uart(backscatter_beamforming 0)
+pico_enable_stdio_usb(backscatter_beamforming 1)
 
 # Add the standard library to the build
 target_link_libraries(backscatter_beamforming pico_stdlib hardware_pio hardware_spi)
