@@ -7,6 +7,20 @@
 
 #include "backscatter.h"
 
+uint16_t instr2[20] = {     
+    63489, 24768, 24640, 24609,   //001 (WAI) 00000 1(POL) 00(GPIO) 01111(GPIO15)
+    44,
+    40994, 0xf701, 0xf001, 0xff00,
+    70,
+    64257,
+    3,
+    40998,
+    0xf701, 0xf101, 0xff00, 0xf800,
+    77,
+    64769,
+    3
+};
+
 // repeat the instruction until the desired delay has past
 int16_t repeat(uint16_t* instructionBuffer, int16_t delay, uint32_t asm_instr, uint8_t *length, uint16_t max_delay){
     while(delay > 0){
@@ -87,7 +101,7 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
     instructionBuffer[length] = ASM_JMP | get_symbol_label; // ...: jmp    get_symbol_label
 
     // configure program origin and length
-    backscatter_program->instructions = instructionBuffer;
+    backscatter_program->instructions = instructionBuffer;//instr2;
     backscatter_program->length = length+1;
     backscatter_program->origin = -1;
     return true;
