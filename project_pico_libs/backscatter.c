@@ -7,6 +7,12 @@
 
 #include "backscatter.h"
 
+#define PH_SH       180   //Define the phase shift to 0, 180, 135
+
+#define PH_SH_0     0
+#define PH_SH_180   180
+#define PH_SH_135   135
+
 // repeat the instruction until the desired delay has past
 int16_t repeat(uint16_t* instructionBuffer, int16_t delay, uint32_t asm_instr, uint8_t *length, uint16_t max_delay){
     while(delay > 0){
@@ -27,65 +33,90 @@ uint8_t instructionCount(uint16_t delay, uint16_t max_delay){
 }
 
 bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instructionBuffer, struct pio_program *backscatter_program, bool twoAntennas){
-    // compute label positions
-    uint16_t MAX_ASMDELAY = 0x0020; // 32
-    uint16_t OPT_SIDE_1   = 0x0000;
-    uint16_t OPT_SIDE_0   = 0x0000;
-    if (twoAntennas){
-        MAX_ASMDELAY = 0x0008;     //   8 
-        OPT_SIDE_1   = 0x1800;
-        OPT_SIDE_0   = 0x1000;
+    uint8_t length = 0;
+    if(PH_SH == PH_SH_0){
+        // compute label positions
+        uint16_t MAX_ASMDELAY = 0x0020; // 32
+        uint16_t OPT_SIDE_1   = 0x0000;
+        uint16_t OPT_SIDE_0   = 0x0000;
+        if (twoAntennas){
+            MAX_ASMDELAY = 0x0008;     //   8 
+            OPT_SIDE_1   = 0x1800;
+            OPT_SIDE_0   = 0x1000;
+        }
+        uint8_t get_symbol_label = 3;
+        uint8_t send_1_label = 5;
+        uint8_t loop_1_label = send_1_label + 1;
+        int16_t lastPeriodCycles1 = (((uint32_t) CLKFREQ*1000000)/baud - 4) % ((uint32_t) d1);
+        int16_t lastPeriodCycles0 = (((uint32_t) CLKFREQ*1000000)/baud - 4) % ((uint32_t) d0);
+        int16_t tmp1 = min(lastPeriodCycles1, d1/2);
+        int16_t tmp0 = min(lastPeriodCycles0, d0/2);
+        /*                                           pull high                 pull low            jmp                 high                                      low                            jmp  */
+        uint8_t send_0_label = loop_1_label + instructionCount(d1/2, MAX_ASMDELAY) + instructionCount(d1/2 - 1, MAX_ASMDELAY) + 1 + instructionCount(tmp1, MAX_ASMDELAY) + instructionCount(max(0,lastPeriodCycles1-tmp1), MAX_ASMDELAY) + 1;
+        uint8_t loop_0_label = send_0_label + 1;
+
+        // check that the program will fit into memory
+        /*                      pull high                pull low            jmp                        high                              low                               jmp  */
+        if(loop_0_label + instructionCount(d0/2, MAX_ASMDELAY) + instructionCount(d0/2 - 1, MAX_ASMDELAY) + 1 + instructionCount(tmp0, MAX_ASMDELAY) + instructionCount(max(0,lastPeriodCycles0-tmp0), MAX_ASMDELAY) + 1 >= 32){
+            printf("ERROR: The clock dividers are too small. The program would not fit into the state-machine instruction memory. Alternatively, you can disable the second antenna. This increaes the maximal delay per instruction from 8 to 32 cycles and thus significanlty reduces the required code space.");
+            return false;
+        }
+
+        // generate state machine
+        instructionBuffer[0] = ASM_SET_PINS | OPT_SIDE_1 | 1;           //  0: set    pins, 1         side 1
+        instructionBuffer[1] = ASM_OUT | (ASM_ISR_REG << 5);            //  1: out    isr, 32   (NOTE: 32=0)
+        instructionBuffer[2] = ASM_OUT | (ASM_Y_REG   << 5);            //  2: out    y, 32     (NOTE: 32=0)
+        instructionBuffer[3] = ASM_OUT | (ASM_X_REG   << 5) |  1;       //  3: out    x, 1   
+        instructionBuffer[4] = ASM_JMP_NOTX | (0x1F & send_0_label);    //  4: jmp    !x, send_0_label
+        /*       symbol 1      */
+        instructionBuffer[5] = ASM_MOV | (ASM_X_REG << 5) | ASM_Y_REG;  //  5: mov    x, y                  
+        length = 6;
+        // full periods
+        repeat(instructionBuffer, d1/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);   //    6: set    pins, 1         side 1 [delay] 
+        repeat(instructionBuffer, d1/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);   //  ...: set    pins, 0         side 0 [delay] 
+        instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
+        length++;
+        // remaining period to fill symbol time
+        repeat(instructionBuffer,                          tmp1, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY); //  ...: set    pins, 1         side 1 [delay] 
+        repeat(instructionBuffer, max(0,lastPeriodCycles1-tmp1), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY); //  ...: set    pins, 0         side 0 [delay] 
+        instructionBuffer[length] = ASM_JMP | get_symbol_label;               // ...: jmp    get_symbol_label
+        length++;
+        /*       symbol 0       */
+        instructionBuffer[length] = ASM_MOV | (ASM_X_REG << 5) | ASM_ISR_REG, // ...: mov    x, isr  
+        length++; 
+        // full periods
+        repeat(instructionBuffer, d0/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);    // ...: set    pins, 1         side 1 [delay_part] 
+        repeat(instructionBuffer, d0/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);    // ...: set    pins, 0         side 0 [delay_part] 
+        instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
+        length++;
+        // remaining period to fill symbol time
+        repeat(instructionBuffer,                          tmp0, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);  //  ...: set    pins, 1         side 1 [delay_part] 
+        repeat(instructionBuffer, max(0,lastPeriodCycles0-tmp0), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);  //  ...: set    pins, 0         side 0 [delay_part] 
+        instructionBuffer[length] = ASM_JMP | get_symbol_label; // ...: jmp    get_symbol_label
     }
-    uint8_t get_symbol_label = 3;
-    uint8_t send_1_label = 5;
-    uint8_t loop_1_label = send_1_label + 1;
-    int16_t lastPeriodCycles1 = (((uint32_t) CLKFREQ*1000000)/baud - 4) % ((uint32_t) d1);
-    int16_t lastPeriodCycles0 = (((uint32_t) CLKFREQ*1000000)/baud - 4) % ((uint32_t) d0);
-    int16_t tmp1 = min(lastPeriodCycles1, d1/2);
-    int16_t tmp0 = min(lastPeriodCycles0, d0/2);
-    /*                                           pull high                 pull low            jmp                 high                                      low                            jmp  */
-    uint8_t send_0_label = loop_1_label + instructionCount(d1/2, MAX_ASMDELAY) + instructionCount(d1/2 - 1, MAX_ASMDELAY) + 1 + instructionCount(tmp1, MAX_ASMDELAY) + instructionCount(max(0,lastPeriodCycles1-tmp1), MAX_ASMDELAY) + 1;
-    uint8_t loop_0_label = send_0_label + 1;
-
-    // check that the program will fit into memory
-    /*                      pull high                pull low            jmp                        high                              low                               jmp  */
-    if(loop_0_label + instructionCount(d0/2, MAX_ASMDELAY) + instructionCount(d0/2 - 1, MAX_ASMDELAY) + 1 + instructionCount(tmp0, MAX_ASMDELAY) + instructionCount(max(0,lastPeriodCycles0-tmp0), MAX_ASMDELAY) + 1 >= 32){
-        printf("ERROR: The clock dividers are too small. The program would not fit into the state-machine instruction memory. Alternatively, you can disable the second antenna. This increaes the maximal delay per instruction from 8 to 32 cycles and thus significanlty reduces the required code space.");
-        return false;
+    else if(PH_SH == PH_SH_180){
+        uint16_t instr_180[22] = {   
+                                63489, 24768, 24640, //set pins 1, side 1; out ISR 32; out Y 32
+                                24609,  //out X, 1
+                                0x2D,   //jmp !x, 13
+                                
+                                40994,  //MOV Y->X
+                                0xf701, 0xf001, 0xff00, //set pins 1, side 0 [7]; set pins 1, side 0 [0]; set pins 0, side 1 [7]
+                                70, // jmp X--, 6
+                                0xF701, 0xF001, //set pins 1, side 0 [7];  set pins 1, side 0 [0]
+                                0x1C03, //jmp always, 3 side 1
+                                
+                                40998,  // mov ISR -> X
+                                0xf701, 0xf101, 0xff00, 0xf800, //set pins 1, side 0 [7]; set pins 1, side 0 [1]; set pins 0, side 1 [7]; set pins 0, side 1 [0]
+                                0x4E,   // jmp X--, 14
+                                0xF701, 0xF101,  // set pins, 1 side 0 [7]; set pins, 1 side 1 [1]
+                                0x1E03, //jmp always, 3 side 1
+        };
+        length = 22;
+        for(int i = 0; i < length; i++){
+            instructionBuffer[i] = instr_180[i];
+        }
     }
-
-    // generate state machine
-    instructionBuffer[0] = ASM_SET_PINS | OPT_SIDE_1 | 1;           //  0: set    pins, 1         side 1
-    instructionBuffer[1] = ASM_OUT | (ASM_ISR_REG << 5);            //  1: out    isr, 32   (NOTE: 32=0)
-    instructionBuffer[2] = ASM_OUT | (ASM_Y_REG   << 5);            //  2: out    y, 32     (NOTE: 32=0)
-    instructionBuffer[3] = ASM_OUT | (ASM_X_REG   << 5) |  1;       //  3: out    x, 1   
-    instructionBuffer[4] = ASM_JMP_NOTX | (0x1F & send_0_label);    //  4: jmp    !x, send_0_label
-    /*       symbol 1      */
-    instructionBuffer[5] = ASM_MOV | (ASM_X_REG << 5) | ASM_Y_REG;  //  5: mov    x, y                  
-    uint8_t length = 6;
-    // full periods
-    repeat(instructionBuffer, d1/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);   //    6: set    pins, 1         side 1 [delay] 
-    repeat(instructionBuffer, d1/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);   //  ...: set    pins, 0         side 0 [delay] 
-    instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
-    length++;
-    // remaining period to fill symbol time
-    repeat(instructionBuffer, tmp1, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY); //  ...: set    pins, 1         side 1 [delay] 
-    repeat(instructionBuffer, max(0,lastPeriodCycles1-tmp1), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY); //  ...: set    pins, 0         side 0 [delay] 
-    instructionBuffer[length] = ASM_JMP | get_symbol_label;               // ...: jmp    get_symbol_label
-    length++;
-    /*       symbol 0       */
-    instructionBuffer[length] = ASM_MOV | (ASM_X_REG << 5) | ASM_ISR_REG, // ...: mov    x, isr  
-    length++; 
-    // full periods
-    repeat(instructionBuffer, d0/2, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);    // ...: set    pins, 1         side 1 [delay_part] 
-    repeat(instructionBuffer, d0/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);    // ...: set    pins, 0         side 0 [delay_part] 
-    instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
-    length++;
-    // remaining period to fill symbol time
-    repeat(instructionBuffer, tmp0, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);  //  ...: set    pins, 1         side 1 [delay_part] 
-    repeat(instructionBuffer, max(0,lastPeriodCycles0-tmp0), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);  //  ...: set    pins, 0         side 0 [delay_part] 
-    instructionBuffer[length] = ASM_JMP | get_symbol_label; // ...: jmp    get_symbol_label
-
     // configure program origin and length
     backscatter_program->instructions = instructionBuffer;
     backscatter_program->length = length+1;
@@ -95,7 +126,7 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
 
 /* 
     - based on d0/d1/baud, the modulation parameters will be computed and returned in the struct backscatter_config 
-    - pin2 is ignored if twoAntennas==falsev
+    - pin2 is ignored if twoAntennas==false
 */
 void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d0, uint16_t d1, uint32_t baud, struct backscatter_config *config, uint16_t *instructionBuffer, bool twoAntennas){
     pio_sm_set_enabled(pio, sm, false); // stop state machine if running
@@ -118,10 +149,10 @@ void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d
     uint offset = 0;
     pio_add_program_at_offset(pio, &backscatter_program, offset); // load program
     /* print state-machine instructions */
-    //printf("state-machine length: %d\n", backscatter_program.length);
-    //for (uint16_t t = 0; t < backscatter_program.length; t++){
-    //    printf("0x%04x\n",backscatter_program.instructions[t]);
-    //}
+    printf("state-machine length: %d\n", backscatter_program.length);
+    for (uint16_t t = 0; t < backscatter_program.length; t++){
+        printf("0x%04x\n",backscatter_program.instructions[t]);
+    }
     // configure the state-machine
     pio_gpio_init(pio, pin1);
     pio_sm_set_consecutive_pindirs(pio, sm, pin1, 1, true);
