@@ -101,7 +101,7 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
     instructionBuffer[length] = ASM_JMP | get_symbol_label; // ...: jmp    get_symbol_label
 
     // configure program origin and length
-    backscatter_program->instructions = instr2;
+    backscatter_program->instructions = instructionBuffer;
     backscatter_program->length = length+1;
     backscatter_program->origin = -1;
     return true;
