@@ -54,8 +54,10 @@ uint8_t instructionCount(uint16_t delay, uint16_t max_delay);
 int16_t repeat(uint16_t* instructionBuffer, int16_t delay, uint32_t asm_instr, uint8_t *length, uint16_t max_delay);
 
 bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instructionBuffer, struct pio_program *backscatter_program, bool twoAntennas);
-
 /* based on d0/d1/baud, the modulation parameters will be computed and returned in the struct backscatter_config */
-void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d0, uint16_t d1, uint32_t baud, struct backscatter_config *config, uint16_t *instructionBuffer, bool twoAntennas);
 
-void backscatter_send(PIO pio, uint sm, uint32_t *message, uint32_t len);
+void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin4, uint16_t d0, uint16_t d1, uint32_t baud, struct backscatter_config *config, uint16_t *instructionBuffer);
+
+void backscatter_send(PIO pio, uint sm0, uint sm1, uint32_t *message, uint32_t len, uint trig_pin);
+
+void enable_sms(uint sm_index, PIO pio, uint32_t baud, uint16_t d0, uint16_t d1);

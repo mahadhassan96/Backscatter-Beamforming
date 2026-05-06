@@ -7,7 +7,7 @@
 
 #include "backscatter.h"
 
-#define PH_SH       180   //Define the phase shift to 0, 180, 135
+#define PH_SH       0   //Define the phase shift to 0, 180, 135
 
 #define PH_SH_0     0
 #define PH_SH_180   180
@@ -66,18 +66,20 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
         instructionBuffer[0] = ASM_SET_PINS | OPT_SIDE_1 | 1;           //  0: set    pins, 1         side 1
         instructionBuffer[1] = ASM_OUT | (ASM_ISR_REG << 5);            //  1: out    isr, 32   (NOTE: 32=0)
         instructionBuffer[2] = ASM_OUT | (ASM_Y_REG   << 5);            //  2: out    y, 32     (NOTE: 32=0)
-        instructionBuffer[3] = ASM_OUT | (ASM_X_REG   << 5) |  1;       //  3: out    x, 1   
-        instructionBuffer[4] = ASM_JMP_NOTX | (0x1F & send_0_label);    //  4: jmp    !x, send_0_label
+        instructionBuffer[3] = 0x00E5; //ASM_OUT | (ASM_X_REG   << 5) |  1;       //  3: out    x, 1  //0x00D6;                                  //  JMP Pin 26
+        instructionBuffer[4] = 0x208F;    //Jmp not empty                                //  IRQ set IRQ1
+        instructionBuffer[5] = ASM_OUT | (ASM_X_REG   << 5) |  1; //ASM_JMP_NOTX | (0x1F & send_0_label);    //  4: jmp    !x, send_0_label
         /*       symbol 1      */
-        instructionBuffer[5] = ASM_MOV | (ASM_X_REG << 5) | ASM_Y_REG;  //  5: mov    x, y                  
-        length = 6;
+        instructionBuffer[6] = 0x2E; 
+        instructionBuffer[7] = ASM_MOV | (ASM_X_REG << 5) | ASM_Y_REG;  //  5: mov    x, y                  
+        length = 8;
         // full periods
         repeat(instructionBuffer, d1/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);   //    6: set    pins, 1         side 1 [delay] 
         repeat(instructionBuffer, d1/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);   //  ...: set    pins, 0         side 0 [delay] 
-        instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
+        instructionBuffer[length] = 0x0048; //ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
         length++;
         // remaining period to fill symbol time
-        repeat(instructionBuffer,                          tmp1, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY); //  ...: set    pins, 1         side 1 [delay] 
+        repeat(instructionBuffer, tmp1, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY); //  ...: set    pins, 1         side 1 [delay] 
         repeat(instructionBuffer, max(0,lastPeriodCycles1-tmp1), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY); //  ...: set    pins, 0         side 0 [delay] 
         instructionBuffer[length] = ASM_JMP | get_symbol_label;               // ...: jmp    get_symbol_label
         length++;
@@ -87,7 +89,7 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
         // full periods
         repeat(instructionBuffer, d0/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);    // ...: set    pins, 1         side 1 [delay_part] 
         repeat(instructionBuffer, d0/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);    // ...: set    pins, 0         side 0 [delay_part] 
-        instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
+        instructionBuffer[length] = 0x004F; //ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
         length++;
         // remaining period to fill symbol time
         repeat(instructionBuffer,                          tmp0, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);  //  ...: set    pins, 1         side 1 [delay_part] 
@@ -96,21 +98,21 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
     }
     else if(PH_SH == PH_SH_180){
         uint16_t instr_180[22] = {   
-                                63489, 24768, 24640, //set pins 1, side 1; out ISR 32; out Y 32
-                                24609,  //out X, 1
-                                0x2D,   //jmp !x, 13
-                                
-                                40994,  //MOV Y->X
-                                0xf701, 0xf001, 0xff00, //set pins 1, side 0 [7]; set pins 1, side 0 [0]; set pins 0, side 1 [7]
-                                70, // jmp X--, 6
-                                0xF701, 0xF001, //set pins 1, side 0 [7];  set pins 1, side 0 [0]
-                                0x1C03, //jmp always, 3 side 1
-                                
-                                40998,  // mov ISR -> X
-                                0xf701, 0xf101, 0xff00, 0xf800, //set pins 1, side 0 [7]; set pins 1, side 0 [1]; set pins 0, side 1 [7]; set pins 0, side 1 [0]
-                                0x4E,   // jmp X--, 14
-                                0xF701, 0xF101,  // set pins, 1 side 0 [7]; set pins, 1 side 1 [1]
-                                0x1E03, //jmp always, 3 side 1
+            63489, 24768, 24640, //set pins 1, side 1; out ISR 32; out Y 32
+            24609,  //out X, 1
+            0x2D,   //jmp !x, 13
+            
+            40994,  //MOV Y->X
+            0xf701, 0xf001, 0xff00, //set pins 1, side 0 [7]; set pins 1, side 0 [0]; set pins 0, side 1 [7]
+            70, // jmp X--, 6
+            0xF701, 0xF001, //set pins 1, side 0 [7];  set pins 1, side 0 [0]
+            0x1C03, //jmp always, 3 side 1
+            
+            40998,  // mov ISR -> X
+            0xf701, 0xf101, 0xff00, 0xf800, //set pins 1, side 0 [7]; set pins 1, side 0 [1]; set pins 0, side 1 [7]; set pins 0, side 1 [0]
+            0x4E,   // jmp X--, 14
+            0xF701, 0xF101,  // set pins, 1 side 0 [7]; set pins, 1 side 1 [1]
+            0x1E03, //jmp always, 3 side 1
         };
         length = 22;
         for(int i = 0; i < length; i++){
@@ -128,8 +130,11 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
     - based on d0/d1/baud, the modulation parameters will be computed and returned in the struct backscatter_config 
     - pin2 is ignored if twoAntennas==false
 */
-void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d0, uint16_t d1, uint32_t baud, struct backscatter_config *config, uint16_t *instructionBuffer, bool twoAntennas){
-    pio_sm_set_enabled(pio, sm, false); // stop state machine if running
+void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin4, uint16_t d0, uint16_t d1, uint32_t baud, struct backscatter_config *config, uint16_t *instructionBuffer){
+    uint sm0 = 0;
+    uint sm1 = 1;
+    uint sm = 3;
+    pio_set_sm_mask_enabled(pio, sm, false);//pio_sm_set_enabled(pio, sm, false); // stop state machine if running
     // print warning at invalid settings
     if(d0 % 2 != 0){
         printf("WARNING: the clock divider d0 has to be an even integer. The state-machine may not function correctly");
@@ -145,7 +150,7 @@ void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d
     }
     // generate pio-program
     struct pio_program backscatter_program;
-    generatePIOprogram(d0,d1,baud, instructionBuffer, &backscatter_program, twoAntennas);
+    generatePIOprogram(d0,d1,baud, instructionBuffer, &backscatter_program, true);
     uint offset = 0;
     pio_add_program_at_offset(pio, &backscatter_program, offset); // load program
     /* print state-machine instructions */
@@ -155,28 +160,47 @@ void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d
     }
     // configure the state-machine
     pio_gpio_init(pio, pin1);
-    pio_sm_set_consecutive_pindirs(pio, sm, pin1, 1, true);
-    if(twoAntennas){
-        pio_gpio_init(pio, pin2);
-        pio_sm_set_consecutive_pindirs(pio, sm, pin2, 1, true);    
-    }
+    pio_sm_set_consecutive_pindirs(pio, sm0, pin1, 1, true);
+    pio_gpio_init(pio, pin2);
+    pio_sm_set_consecutive_pindirs(pio, sm0, pin2, 1, true); 
+
+    pio_gpio_init(pio, pin3);
+    pio_sm_set_consecutive_pindirs(pio, sm1, pin3, 1, true);
+    pio_gpio_init(pio, pin4);
+    pio_sm_set_consecutive_pindirs(pio, sm1, pin4, 1, true); 
+    
     // setup default state-machine config
-    pio_sm_config c = pio_get_default_sm_config();
-    sm_config_set_wrap(&c, offset, offset + backscatter_program.length-1); 
+    pio_sm_config c0 = pio_get_default_sm_config();
+    pio_sm_config c1 = pio_get_default_sm_config();
+    sm_config_set_wrap(&c0, offset, offset + backscatter_program.length-1); 
+    sm_config_set_wrap(&c1, offset, offset + backscatter_program.length-1); 
     // setup specific state-machine config
-    sm_config_set_set_pins(&c, pin1, 1);
-    if(twoAntennas){
-        sm_config_set_sideset(&c, 2, true, false);
-        sm_config_set_sideset_pins(&c, pin2);
-    }
-    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX); // We only need TX, so get an 8-deep FIFO (join RX and TX FIFO)
-    sm_config_set_out_shift(&c, false, true, 32);  // OUT shifts to left (MSB first), autopull after every 32 bit
-    pio_sm_init(pio, sm, offset, &c);
-    pio_sm_set_enabled(pio, sm, true);
+    sm_config_set_set_pins(&c0, pin1, 1);
+    sm_config_set_sideset(&c0, 2, true, false);
+    sm_config_set_sideset_pins(&c0, pin2);
+
+    sm_config_set_set_pins(&c1, pin3, 1);
+    sm_config_set_sideset(&c1, 2, true, false);
+    sm_config_set_sideset_pins(&c1, pin4);
+    
+    sm_config_set_fifo_join(&c0, PIO_FIFO_JOIN_TX); // We only need TX, so get an 8-deep FIFO (join RX and TX FIFO)
+    sm_config_set_fifo_join(&c1, PIO_FIFO_JOIN_TX);
+    
+    sm_config_set_out_shift(&c0, false, true, 32);  // OUT shifts to left (MSB first), autopull after every 32 bit
+    sm_config_set_out_shift(&c1, false, true, 32);
+    pio_sm_init(pio, sm0, offset, &c0);
+    pio_sm_init(pio, sm1, offset, &c1);
+
+    //pio_sm_set_enabled(pio, sm, true);
+    pio_enable_sm_mask_in_sync(pio0, sm);
+    
     uint32_t reps0 = ((CLKFREQ*1000000/baud - 4) / d0) - 1;
     uint32_t reps1 = ((CLKFREQ*1000000/baud - 4) / d1) - 1;
-    pio_sm_put_blocking(pio, sm, reps0); // -1 is requried since JMP 0-- is still true
-    pio_sm_put_blocking(pio, sm, reps1); // -1 is required since JMP 0-- is still true
+    
+    pio_sm_put_blocking(pio, sm0, reps0); // -1 is requried since JMP 0-- is still true
+    pio_sm_put_blocking(pio, sm0, reps1); // -1 is required since JMP 0-- is still true
+    pio_sm_put_blocking(pio, sm1, reps0); // -1 is requried since JMP 0-- is still true
+    pio_sm_put_blocking(pio, sm1, reps1); // -1 is required since JMP 0-- is still true
 
     // compute configuration parameters
     uint32_t fcenter    = (CLKFREQ*1000000/d0 + CLKFREQ*1000000/d1)/2;
@@ -199,9 +223,16 @@ void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d
     printf("Computed baseband settings: \n- baudrate: %d\n- Center offset: %d\n- deviation: %d\n- RX Bandwidth: %d\n", config->baudrate, config->center_offset, config->deviation, config->minRxBw);
 }
 
-void backscatter_send(PIO pio, uint sm, uint32_t *message, uint32_t len) {
+void backscatter_send(PIO pio, uint sm0, uint sm1, uint32_t *message, uint32_t len, uint trig_pin) {
+    uint32_t f_debug = pio0_hw->fdebug;
     for(uint32_t i = 0; i < len; i++){
-        pio_sm_put_blocking(pio, sm, message[i]); // set pin back to low
+        while(f_debug & (3u << PIO_FDEBUG_TXSTALL_LSB)){
+            
+        }
+        pio_sm_put_blocking(pio, sm0, message[i]); // set pin back to low
+        pio_sm_put_blocking(pio, sm1, message[i]);
+        gpio_put(trig_pin, 1);
+        sleep_us(1);
+        gpio_put(trig_pin, 0);  
     }
-    sleep_ms(1); // wait for transmission to finish
 }

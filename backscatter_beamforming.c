@@ -29,6 +29,9 @@
 #define RECEIVER              1352 // define the receiver board either 2500 or 1352
 #define PIN_TX1                  6
 #define PIN_TX2                 27
+#define PIN_TX3                  9
+#define PIN_TX4                 22
+#define TRIGGER_PIN             15
 #define CLOCK_DIV0              20 // larger
 #define CLOCK_DIV1              18 // smaller
 #define DESIRED_BAUD        100000
@@ -61,13 +64,19 @@ int main() {
 
     sleep_ms(5000);
 
+    /*Setup GPIO 15 */
+    gpio_init(TRIGGER_PIN);
+    gpio_set_dir(TRIGGER_PIN, GPIO_OUT);
+    gpio_put(TRIGGER_PIN, false);
+
     /* setup backscatter state machine */
     PIO pio = pio0;
-    uint sm = 0;
+    uint sm0 = 0;
+    uint sm1 = 1;
     struct backscatter_config backscatter_conf;
+    struct pio_program backscatter_program;
     uint16_t instructionBuffer[32] = {0}; // maximal instruction size: 32
-    backscatter_program_init(pio, sm, PIN_TX1, PIN_TX2, CLOCK_DIV0, CLOCK_DIV1, DESIRED_BAUD, &backscatter_conf, instructionBuffer, TWOANTENNAS);
-
+    backscatter_program_init(pio, PIN_TX1, PIN_TX2, PIN_TX3, PIN_TX4, CLOCK_DIV0, CLOCK_DIV1, DESIRED_BAUD, &backscatter_conf, instructionBuffer);
     static uint8_t message[buffer_size(PAYLOADSIZE+2, HEADER_LEN)*4] = {0};  // include 10 header bytes
     static uint32_t buffer[buffer_size(PAYLOADSIZE, HEADER_LEN)] = {0}; // initialize the buffer
     static uint8_t seq = 0;
@@ -130,7 +139,7 @@ int main() {
                     /* put the data to FIFO (start backscattering) */
                     startCarrier();
                     sleep_ms(1); // wait for carrier to start
-                    backscatter_send(pio,sm,buffer,buffer_size(PAYLOADSIZE, HEADER_LEN));
+                    backscatter_send(pio,sm0,sm1,buffer,buffer_size(PAYLOADSIZE, HEADER_LEN), TRIGGER_PIN);
                     sleep_ms(ceil((((double) buffer_size(PAYLOADSIZE, HEADER_LEN))*8000.0)/((double) DESIRED_BAUD))+3); // wait transmission duration (+3ms)
                     stopCarrier();
                     /* increase seq number*/ 
