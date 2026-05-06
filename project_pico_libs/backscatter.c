@@ -66,22 +66,25 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
         instructionBuffer[0] = ASM_SET_PINS | OPT_SIDE_1 | 1;           //  0: set    pins, 1         side 1
         instructionBuffer[1] = ASM_OUT | (ASM_ISR_REG << 5);            //  1: out    isr, 32   (NOTE: 32=0)
         instructionBuffer[2] = ASM_OUT | (ASM_Y_REG   << 5);            //  2: out    y, 32     (NOTE: 32=0)
-        instructionBuffer[3] = 0x00E5; //ASM_OUT | (ASM_X_REG   << 5) |  1;       //  3: out    x, 1  //0x00D6;                                  //  JMP Pin 26
-        instructionBuffer[4] = 0x208F;    //Jmp not empty                                //  IRQ set IRQ1
+        instructionBuffer[3] = pio_encode_wait_irq(true, false, 3);  // Wait on IRQ                                 //  JMP Pin 26
+        instructionBuffer[4] = pio_encode_pull(false, true);
         instructionBuffer[5] = ASM_OUT | (ASM_X_REG   << 5) |  1; //ASM_JMP_NOTX | (0x1F & send_0_label);    //  4: jmp    !x, send_0_label
+        instructionBuffer[6] = pio_encode_jmp_not_x(14);
         /*       symbol 1      */
-        instructionBuffer[6] = 0x2E; 
+        
         instructionBuffer[7] = ASM_MOV | (ASM_X_REG << 5) | ASM_Y_REG;  //  5: mov    x, y                  
         length = 8;
         // full periods
         repeat(instructionBuffer, d1/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);   //    6: set    pins, 1         side 1 [delay] 
         repeat(instructionBuffer, d1/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);   //  ...: set    pins, 0         side 0 [delay] 
-        instructionBuffer[length] = 0x0048; //ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
+        instructionBuffer[length] = pio_encode_jmp_x_dec(8); //ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
         length++;
         // remaining period to fill symbol time
         repeat(instructionBuffer, tmp1, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY); //  ...: set    pins, 1         side 1 [delay] 
         repeat(instructionBuffer, max(0,lastPeriodCycles1-tmp1), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY); //  ...: set    pins, 0         side 0 [delay] 
-        instructionBuffer[length] = ASM_JMP | get_symbol_label;               // ...: jmp    get_symbol_label
+        instructionBuffer[length] = pio_encode_jmp_not_osre(5); //ASM_JMP | get_symbol_label;               // ...: jmp    get_symbol_label
+        length++;
+        instructionBuffer[length] = pio_encode_jmp(3);
         length++;
         /*       symbol 0       */
         instructionBuffer[length] = ASM_MOV | (ASM_X_REG << 5) | ASM_ISR_REG, // ...: mov    x, isr  
@@ -89,12 +92,14 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
         // full periods
         repeat(instructionBuffer, d0/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);    // ...: set    pins, 1         side 1 [delay_part] 
         repeat(instructionBuffer, d0/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);    // ...: set    pins, 0         side 0 [delay_part] 
-        instructionBuffer[length] = 0x004F; //ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
+        instructionBuffer[length] = pio_encode_jmp_x_dec(16); //0x004F; //ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
         length++;
         // remaining period to fill symbol time
-        repeat(instructionBuffer,                          tmp0, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);  //  ...: set    pins, 1         side 1 [delay_part] 
+        repeat(instructionBuffer, tmp0, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);  //  ...: set    pins, 1         side 1 [delay_part] 
         repeat(instructionBuffer, max(0,lastPeriodCycles0-tmp0), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);  //  ...: set    pins, 0         side 0 [delay_part] 
-        instructionBuffer[length] = ASM_JMP | get_symbol_label; // ...: jmp    get_symbol_label
+        instructionBuffer[length] = pio_encode_jmp_not_osre(5);
+        length++;
+        instructionBuffer[length] = pio_encode_jmp(3); // ...: jmp    get_symbol_label
     }
     else if(PH_SH == PH_SH_180){
         uint16_t instr_180[22] = {   
@@ -186,13 +191,13 @@ void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin
     sm_config_set_fifo_join(&c0, PIO_FIFO_JOIN_TX); // We only need TX, so get an 8-deep FIFO (join RX and TX FIFO)
     sm_config_set_fifo_join(&c1, PIO_FIFO_JOIN_TX);
     
-    sm_config_set_out_shift(&c0, false, true, 32);  // OUT shifts to left (MSB first), autopull after every 32 bit
-    sm_config_set_out_shift(&c1, false, true, 32);
+    sm_config_set_out_shift(&c0, false, false, 32);  // OUT shifts to left (MSB first), autopull after every 32 bit
+    sm_config_set_out_shift(&c1, false, false, 32);
     pio_sm_init(pio, sm0, offset, &c0);
     pio_sm_init(pio, sm1, offset, &c1);
 
     //pio_sm_set_enabled(pio, sm, true);
-    pio_enable_sm_mask_in_sync(pio0, sm);
+    pio_enable_sm_mask_in_sync(pio, sm);
     
     uint32_t reps0 = ((CLKFREQ*1000000/baud - 4) / d0) - 1;
     uint32_t reps1 = ((CLKFREQ*1000000/baud - 4) / d1) - 1;
@@ -221,18 +226,24 @@ void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin
     }
 
     printf("Computed baseband settings: \n- baudrate: %d\n- Center offset: %d\n- deviation: %d\n- RX Bandwidth: %d\n", config->baudrate, config->center_offset, config->deviation, config->minRxBw);
+    sleep_ms(100);
 }
 
 void backscatter_send(PIO pio, uint sm0, uint sm1, uint32_t *message, uint32_t len, uint trig_pin) {
-    uint32_t f_debug = pio0_hw->fdebug;
+    //uint32_t f_debug = pio0_hw->fdebug;
+    printf("first byte\n");
     for(uint32_t i = 0; i < len; i++){
-        while(f_debug & (3u << PIO_FDEBUG_TXSTALL_LSB)){
-            
-        }
+        //while(pio_sm_get_tx_fifo_level(pio0, 0) > 1 && pio_sm_get_tx_fifo_level(pio0, 1) > 1){
+        //}
+        //printf("send data\n");
         pio_sm_put_blocking(pio, sm0, message[i]); // set pin back to low
         pio_sm_put_blocking(pio, sm1, message[i]);
-        gpio_put(trig_pin, 1);
-        sleep_us(1);
-        gpio_put(trig_pin, 0);  
+        //printf("data sent\n");
+        //printf("sent sm1\n");
+        //gpio_put(trig_pin, 1);
+        //sleep_us(1);
+        //gpio_put(trig_pin, 0); 
+
+        pio->irq = (1u << 3);
     }
 }
