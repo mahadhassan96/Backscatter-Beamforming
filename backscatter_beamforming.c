@@ -20,7 +20,6 @@
 #include "receiver_CC2500.h"
 #include "packet_generation.h"
 
-
 #define RADIO_SPI             spi0
 #define RADIO_MISO              16
 #define RADIO_MOSI              19
@@ -30,6 +29,8 @@
 #define RECEIVER              1352 // define the receiver board either 2500 or 1352
 #define PIN_TX1                  6
 #define PIN_TX2                 27
+#define PIN_TX3                  9
+#define PIN_TX4                 22
 #define CLOCK_DIV0              20 // larger
 #define CLOCK_DIV1              18 // smaller
 #define DESIRED_BAUD        100000
@@ -54,6 +55,10 @@ int main() {
     gpio_put(PICO_DEFAULT_LED_PIN, true);
     stdio_init_all();
 
+    gpio_init(15);
+    gpio_set_dir(15, GPIO_OUT);
+    gpio_put(15, true);
+
     sleep_ms(5000);
 
     /* setup backscatter state machine */
@@ -61,7 +66,7 @@ int main() {
     uint sm = 0;
     struct backscatter_config backscatter_conf;
     uint16_t instructionBuffer[32] = {0}; // maximal instruction size: 32
-    backscatter_program_init(pio, sm, PIN_TX1, PIN_TX2, CLOCK_DIV0, CLOCK_DIV1, DESIRED_BAUD, &backscatter_conf, instructionBuffer, TWOANTENNAS);
+    backscatter_program_init(pio, PIN_TX1, PIN_TX2, PIN_TX3, PIN_TX4, CLOCK_DIV0, CLOCK_DIV1, DESIRED_BAUD, &backscatter_conf, instructionBuffer, TWOANTENNAS);
 
     static uint8_t message[buffer_size(PAYLOADSIZE+2, HEADER_LEN)*4] = {0};  // include 10 header bytes
     static uint32_t buffer[buffer_size(PAYLOADSIZE, HEADER_LEN)] = {0}; // initialize the buffer

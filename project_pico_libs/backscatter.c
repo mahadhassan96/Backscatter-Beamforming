@@ -40,6 +40,8 @@ uint8_t instructionCount(uint16_t delay, uint16_t max_delay){
     }
 }
 
+
+
 bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instructionBuffer, struct pio_program *backscatter_program, bool twoAntennas){
     // compute label positions
     uint16_t MAX_ASMDELAY = 0x0020; // 32
@@ -72,15 +74,17 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
     instructionBuffer[0] = ASM_SET_PINS | OPT_SIDE_1 | 1;           //  0: set    pins, 1         side 1
     instructionBuffer[1] = ASM_OUT | (ASM_ISR_REG << 5);            //  1: out    isr, 32   (NOTE: 32=0)
     instructionBuffer[2] = ASM_OUT | (ASM_Y_REG   << 5);            //  2: out    y, 32     (NOTE: 32=0)
-    instructionBuffer[3] = ASM_OUT | (ASM_X_REG   << 5) |  1;       //  3: out    x, 1   
-    instructionBuffer[4] = ASM_JMP_NOTX | (0x1F & send_0_label);    //  4: jmp    !x, send_0_label
+    instructionBuffer[3] = pio_encode_jmp_not_osre(5);
+    instructionBuffer[4] = pio_encode_wait_gpio(true, 15);
+    instructionBuffer[5] = ASM_OUT | (ASM_X_REG   << 5) |  1;       //  3: out    x, 1   
+    instructionBuffer[6] = pio_encode_jmp_not_x(14); //ASM_JMP_NOTX | (0x1F & send_0_label);    //  4: jmp    !x, send_0_label
     /*       symbol 1      */
-    instructionBuffer[5] = ASM_MOV | (ASM_X_REG << 5) | ASM_Y_REG;  //  5: mov    x, y                  
-    uint8_t length = 6;
+    instructionBuffer[7] = ASM_MOV | (ASM_X_REG << 5) | ASM_Y_REG;  //  5: mov    x, y                  
+    uint8_t length = 8;
     // full periods
     repeat(instructionBuffer, d1/2,     ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);   //    6: set    pins, 1         side 1 [delay] 
     repeat(instructionBuffer, d1/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);   //  ...: set    pins, 0         side 0 [delay] 
-    instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
+    instructionBuffer[length] = pio_encode_jmp_x_dec(8); //ASM_JMP_XMM | (0x1F & loop_1_label);                             //  ...: jmp    x--, loop_1_label
     length++;
     // remaining period to fill symbol time
     repeat(instructionBuffer, tmp1, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY); //  ...: set    pins, 1         side 1 [delay] 
@@ -93,12 +97,14 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
     // full periods
     repeat(instructionBuffer, d0/2, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);    // ...: set    pins, 1         side 1 [delay_part] 
     repeat(instructionBuffer, d0/2 - 1, ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);    // ...: set    pins, 0         side 0 [delay_part] 
-    instructionBuffer[length] = ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
+    instructionBuffer[length] = pio_encode_jmp_x_dec(15);//ASM_JMP_XMM | (0x1F & loop_0_label);      //  ...: jmp    x--, loop_0_label
     length++;
     // remaining period to fill symbol time
     repeat(instructionBuffer, tmp0, ASM_SET_PINS | OPT_SIDE_1 | 1, &length, MAX_ASMDELAY);  //  ...: set    pins, 1         side 1 [delay_part] 
     repeat(instructionBuffer, max(0,lastPeriodCycles0-tmp0), ASM_SET_PINS | OPT_SIDE_0 | 0, &length, MAX_ASMDELAY);  //  ...: set    pins, 0         side 0 [delay_part] 
     instructionBuffer[length] = ASM_JMP | get_symbol_label; // ...: jmp    get_symbol_label
+
+    //static uint16_t instr[] = {0xFF01, 0xFF01, 0xF700, 0xF600, 0xF700, 0xF600, 0x0000}; //for testing
 
     // configure program origin and length
     backscatter_program->instructions = instructionBuffer;
@@ -111,8 +117,11 @@ bool generatePIOprogram(uint16_t d0,uint16_t d1, uint32_t baud, uint16_t* instru
     - based on d0/d1/baud, the modulation parameters will be computed and returned in the struct backscatter_config 
     - pin2 is ignored if twoAntennas==falsev
 */
-void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d0, uint16_t d1, uint32_t baud, struct backscatter_config *config, uint16_t *instructionBuffer, bool twoAntennas){
-    pio_sm_set_enabled(pio, sm, false); // stop state machine if running
+void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin4, uint16_t d0, uint16_t d1, uint32_t baud, struct backscatter_config *config, uint16_t *instructionBuffer, bool twoAntennas){
+    uint sm0 = 0;
+    uint sm1 = 1;
+    pio_sm_set_enabled(pio, sm0, false); // stop state machine if running
+    pio_sm_set_enabled(pio, sm1, false);
     // print warning at invalid settings
     if(d0 % 2 != 0){
         printf("WARNING: the clock divider d0 has to be an even integer. The state-machine may not function correctly");
@@ -129,37 +138,81 @@ void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d
     // generate pio-program
     struct pio_program backscatter_program;
     generatePIOprogram(d0,d1,baud, instructionBuffer, &backscatter_program, twoAntennas);
-    uint offset = 0;
-    pio_add_program_at_offset(pio, &backscatter_program, offset); // load program
+    //uint offset = 0;
+    uint offset = pio_add_program(pio, &backscatter_program); //pio_add_program_at_offset(pio, &backscatter_program, offset); // load program
+    if(offset < 0){
+        printf("error in instruction");
+    }
+
+
     /* print state-machine instructions */
-    //printf("state-machine length: %d\n", backscatter_program.length);
-    //for (uint16_t t = 0; t < backscatter_program.length; t++){
-    //    printf("0x%04x\n",backscatter_program.instructions[t]);
-    //}
+    printf("state-machine length: %d\n", backscatter_program.length);
+    for (uint16_t t = 0; t < backscatter_program.length; t++){
+        printf("0x%04x\n",backscatter_program.instructions[t]);
+    }
+
     // configure the state-machine
     pio_gpio_init(pio, pin1);
-    pio_sm_set_consecutive_pindirs(pio, sm, pin1, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm0, pin1, 1, true);
     if(twoAntennas){
         pio_gpio_init(pio, pin2);
-        pio_sm_set_consecutive_pindirs(pio, sm, pin2, 1, true);    
+        pio_sm_set_consecutive_pindirs(pio, sm0, pin2, 1, true);    
     }
-    // setup default state-machine config
-    pio_sm_config c = pio_get_default_sm_config();
-    sm_config_set_wrap(&c, offset, offset + backscatter_program.length-1); 
-    // setup specific state-machine config
-    sm_config_set_set_pins(&c, pin1, 1);
+
+    pio_gpio_init(pio, pin3);
+    pio_sm_set_consecutive_pindirs(pio, sm1, pin3, 1, true);
     if(twoAntennas){
-        sm_config_set_sideset(&c, 2, true, false);
-        sm_config_set_sideset_pins(&c, pin2);
+        pio_gpio_init(pio, pin4);
+        pio_sm_set_consecutive_pindirs(pio, sm1, pin4, 1, true);    
     }
-    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX); // We only need TX, so get an 8-deep FIFO (join RX and TX FIFO)
-    sm_config_set_out_shift(&c, false, true, 32);  // OUT shifts to left (MSB first), autopull after every 32 bit
-    pio_sm_init(pio, sm, offset, &c);
-    pio_sm_set_enabled(pio, sm, true);
+
+    /*-------------------------- SM 0 -----------------------------*/
+
+    // setup default state-machine config
+    pio_sm_config c0 = pio_get_default_sm_config();
+    sm_config_set_wrap(&c0, offset, offset + backscatter_program.length-1); 
+    sm_config_set_set_pins(&c0, pin1, 1);
+
+    if(twoAntennas){
+        sm_config_set_sideset(&c0, 2, true, false);
+        sm_config_set_sideset_pins(&c0, pin2);
+    }
+
+    sm_config_set_fifo_join(&c0, PIO_FIFO_JOIN_TX); // We only need TX, so get an 8-deep FIFO (join RX and TX FIFO)
+    sm_config_set_out_shift(&c0, false, true, 32);  // OUT shifts to left (MSB first), autopull after every 32 bit
+    //pio_sm_init(pio, sm0, offset, &c0);
+    pio_sm_set_config(pio, sm0, &c0);
+    pio_sm_exec(pio, sm0, pio_encode_jmp(offset));
+
+    /*------------------------- SM1----------------------------------------------------*/
+
+    pio_sm_config c1 = pio_get_default_sm_config();
+    sm_config_set_wrap(&c1, offset, offset + backscatter_program.length-1); 
+    sm_config_set_set_pins(&c1, pin3, 1);
+
+    if(twoAntennas){
+        sm_config_set_sideset(&c1, 2, true, false);
+        sm_config_set_sideset_pins(&c1, pin4);
+    }
+
+    sm_config_set_fifo_join(&c1, PIO_FIFO_JOIN_TX);
+    sm_config_set_out_shift(&c1, false, true, 32);
+    //pio_sm_init(pio, sm1, offset, &c1);
+    pio_sm_set_config(pio, sm1, &c1);
+    pio_sm_exec(pio, sm1, pio_encode_jmp(offset));
+
     uint32_t reps0 = ((CLKFREQ*1000000/baud - 4) / d0) - 1;
     uint32_t reps1 = ((CLKFREQ*1000000/baud - 4) / d1) - 1;
-    pio_sm_put_blocking(pio, sm, reps0); // -1 is requried since JMP 0-- is still true
-    pio_sm_put_blocking(pio, sm, reps1); // -1 is required since JMP 0-- is still true
+    pio_sm_put_blocking(pio, sm0, reps0); // -1 is requried since JMP 0-- is still true
+    pio_sm_put_blocking(pio, sm1, reps0); // -1 is requried since JMP 0-- is still true
+    pio_sm_put_blocking(pio, sm0, reps1); // -1 is required since JMP 0-- is still true
+    pio_sm_put_blocking(pio, sm1, reps1); // -1 is required since JMP 0-- is still true
+    
+    uint32_t mask = (1u << sm0) | (1u << sm1);
+    //pio->ctrl |= mask << PIO_CTRL_CLKDIV_RESTART_LSB;
+    pio_set_sm_mask_enabled(pio, mask, true);
+    
+    /**----------------------------------------------------------------------------------- */
 
     // compute configuration parameters
     uint32_t fcenter    = (CLKFREQ*1000000/d0 + CLKFREQ*1000000/d1)/2;
@@ -180,11 +233,23 @@ void backscatter_program_init(PIO pio, uint sm, uint pin1, uint pin2, uint16_t d
     }
 
     printf("Computed baseband settings: \n- baudrate: %d\n- Center offset: %d\n- deviation: %d\n- RX Bandwidth: %d\n", config->baudrate, config->center_offset, config->deviation, config->minRxBw);
+
+    sleep_ms(100);
+
 }
 
 void backscatter_send(PIO pio, uint sm, uint32_t *message, uint32_t len) {
+    printf("TX lvl: %d %d\n", pio_sm_get_tx_fifo_level(pio, sm), pio_sm_get_tx_fifo_level(pio, sm+1));
     for(uint32_t i = 0; i < len; i++){
+        //pio->txf[0] = message[i];
+        //pio->txf[1] = message[i];
         pio_sm_put_blocking(pio, sm, message[i]); // set pin back to low
+        pio_sm_put_blocking(pio, sm+1, message[i]);
+
+        //pio->irq_force = (1u << 3);
+        gpio_put(15, true);
+        sleep_us(10);
+        gpio_put(15, false);
     }
     sleep_ms(1); // wait for transmission to finish
 }
