@@ -138,12 +138,11 @@ void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin
     // generate pio-program
     struct pio_program backscatter_program;
     generatePIOprogram(d0,d1,baud, instructionBuffer, &backscatter_program, twoAntennas);
-    //uint offset = 0;
+
     uint offset = pio_add_program(pio, &backscatter_program); //pio_add_program_at_offset(pio, &backscatter_program, offset); // load program
     if(offset < 0){
         printf("error in instruction");
     }
-
 
     /* print state-machine instructions */
     printf("state-machine length: %d\n", backscatter_program.length);
@@ -180,7 +179,6 @@ void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin
 
     sm_config_set_fifo_join(&c0, PIO_FIFO_JOIN_TX); // We only need TX, so get an 8-deep FIFO (join RX and TX FIFO)
     sm_config_set_out_shift(&c0, false, true, 32);  // OUT shifts to left (MSB first), autopull after every 32 bit
-    //pio_sm_init(pio, sm0, offset, &c0);
     pio_sm_set_config(pio, sm0, &c0);
     pio_sm_exec(pio, sm0, pio_encode_jmp(offset));
 
@@ -197,7 +195,6 @@ void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin
 
     sm_config_set_fifo_join(&c1, PIO_FIFO_JOIN_TX);
     sm_config_set_out_shift(&c1, false, true, 32);
-    //pio_sm_init(pio, sm1, offset, &c1);
     pio_sm_set_config(pio, sm1, &c1);
     pio_sm_exec(pio, sm1, pio_encode_jmp(offset));
 
@@ -209,7 +206,6 @@ void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin
     pio_sm_put_blocking(pio, sm1, reps1); // -1 is required since JMP 0-- is still true
     
     uint32_t mask = (1u << sm0) | (1u << sm1);
-    //pio->ctrl |= mask << PIO_CTRL_CLKDIV_RESTART_LSB;
     pio_set_sm_mask_enabled(pio, mask, true);
     
     /**----------------------------------------------------------------------------------- */
@@ -239,18 +235,15 @@ void backscatter_program_init(PIO pio, uint pin1, uint pin2, uint pin3, uint pin
 }
 
 void backscatter_send(PIO pio, uint sm, uint32_t *message, uint32_t len) {
-    printf("TX lvl: %d %d\n", pio_sm_get_tx_fifo_level(pio, sm), pio_sm_get_tx_fifo_level(pio, sm+1));
+    //printf("TX lvl: %d %d\n", pio_sm_get_tx_fifo_level(pio, sm), pio_sm_get_tx_fifo_level(pio, sm+1));
+    //printf("len: %d\n", len);
     for(uint32_t i = 0; i < len; i++){
-        //pio->txf[0] = message[i];
-        //pio->txf[1] = message[i];
         pio_sm_put_blocking(pio, sm, message[i]); // set pin back to low
         pio_sm_put_blocking(pio, sm+1, message[i]);
-
-        //pio->irq_force = (1u << 3);
-        gpio_put(15, true);
-        sleep_us(10);
-        gpio_put(15, false);
     }
+    gpio_put(15, true);
+    sleep_us(10);
+    gpio_put(15, false);
     sleep_ms(1); // wait for transmission to finish
 }
 
